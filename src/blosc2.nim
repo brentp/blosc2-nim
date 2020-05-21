@@ -130,11 +130,23 @@ type Action* {.pure.} = enum
 
 proc blosc2_getitem_ctx(context:blosc2_context, src:pointer, start:cint, nitems:cint, dest:pointer): cint {.blosc2.}
 
-proc getitem*[T](ctx:blosc2_context, src:var seq[uint8], start:int, stop:int): seq[T] =
-  result = newSeqUninitialized[T](stop.int - start.int)
-  let bytes = ctx.blosc2_getitem_ctx(src[0].addr.pointer, start.cint, stop - start.cint, result[0].addr.pointer)
-  if bytes != result.len * sizeof(T):
+proc getitem*[T](ctx:blosc2_context, src:var seq[uint8], start:int, output:var seq[T]) =
+  let bytes = ctx.blosc2_getitem_ctx(src[0].addr.pointer, start.cint, output.len.cint, output[0].addr.pointer)
+  if bytes != output.len * sizeof(T):
     raise newException(IOError, "blosc2: error in getitem, unexpected number of bytes")
+
+proc blosc_cbuffer_sizes(cbuffer:pointer, nbytes:ptr csize_t, cbytes:ptr csize_t, blocksize:ptr csize_t) {.blosc2.}
+
+proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compressed_bytes:int, blocksize:int] =
+  ## given a compressed buffer report the compressed, uncompressed, and block-size
+  var ub:csize_t
+  var cb:csize_t
+  var bs: csize_t
+  buffer[0].addr.pointer.blosc_cbuffer_sizes(ub.addr, cb.addr, bs.addr)
+  result.uncompressed_bytes = ub.int
+  result.compressed_bytes = cb.int
+  result.block_size = bs.int
+
 
 proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
   var ctx = blosc2_cparams()

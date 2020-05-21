@@ -29,8 +29,19 @@ suite "blosc2":
     var dctx = decompressContext()
 
     var compressed = ctx.compress(x)
+    var got = newSeq[int32](4)
 
-    let got = getitem[int32](ctx, compressed, 4, 8)
+    ctx.getitem(compressed, 4, got)
     for i, g in got:
       check g == x[i + 4]
+
+    check got.len == 4
+
+  test "buffer info":
+
+    var ctx = compressContext[int32]("lz4hc", delta=false)
+    var compressed = ctx.compress(x)
+
+    var bi = compressed.buffer_info
+    check bi.uncompressed_bytes == x.len * sizeof(x[0])
 

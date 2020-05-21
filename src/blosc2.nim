@@ -128,6 +128,14 @@ type Action* {.pure.} = enum
   Compress
   Decompress
 
+proc blosc2_getitem_ctx(context:blosc2_context, src:pointer, start:cint, nitems:cint, dest:pointer): cint {.blosc2.}
+
+proc getitem*[T](ctx:blosc2_context, src:var seq[uint8], start:int, stop:int): seq[T] =
+  result = newSeqUninitialized[T](stop.int - start.int)
+  let bytes = ctx.blosc2_getitem_ctx(src[0].addr.pointer, start.cint, stop - start.cint, result[0].addr.pointer)
+  if bytes != result.len * sizeof(T):
+    raise newException(IOError, "blosc2: error in getitem, unexpected number of bytes")
+
 proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
   var ctx = blosc2_cparams()
   ctx.compcode = blosc_compname_to_compcode(codec).uint8

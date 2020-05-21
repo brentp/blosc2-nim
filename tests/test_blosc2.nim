@@ -11,6 +11,9 @@ suite "blosc2":
 
     var ctx = compressContext[int32]("lz4hc", delta=false)
     var dctx = decompressContext()
+    defer:
+      ctx.freeContext
+      dctx.freeContext
 
     var compressed = ctx.compress(x)
     check compressed.len < x.len * sizeof(x[0])
@@ -27,6 +30,9 @@ suite "blosc2":
 
     var ctx = compressContext[int32]("lz4hc", delta=false)
     var dctx = decompressContext()
+    defer:
+      ctx.freeContext
+      dctx.freeContext
 
     var compressed = ctx.compress(x)
     var got = newSeq[int32](4)
@@ -40,8 +46,13 @@ suite "blosc2":
   test "buffer info":
 
     var ctx = compressContext[int32]("lz4hc", delta=false)
+    defer: ctx.freeContext
     var compressed = ctx.compress(x)
 
     var bi = compressed.buffer_info
     check bi.uncompressed_bytes == x.len * sizeof(x[0])
+    check bi.typesize == sizeof(x[0])
+    check bi.complib == "LZ4"
+    echo bi
+
 

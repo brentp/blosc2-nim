@@ -136,8 +136,10 @@ proc getitem*[T](ctx:blosc2_context, src:var seq[uint8], start:int, output:var s
     raise newException(IOError, "blosc2: error in getitem, unexpected number of bytes")
 
 proc blosc_cbuffer_sizes(cbuffer:pointer, nbytes:ptr csize_t, cbytes:ptr csize_t, blocksize:ptr csize_t) {.blosc2.}
+proc blosc_cbuffer_metainfo(cbuffer:pointer, typesize: ptr csize_t, flags: ptr cint) {.blosc2.}
+proc blosc_cbuffer_complib(cbuffer:pointer): cstring {.blosc2.}
 
-proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compressed_bytes:int, blocksize:int] =
+proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compressed_bytes:int, blocksize:int, typesize:int, flags: int, complib:string] =
   ## given a compressed buffer report the compressed, uncompressed, and block-size
   var ub:csize_t
   var cb:csize_t
@@ -146,6 +148,12 @@ proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compre
   result.uncompressed_bytes = ub.int
   result.compressed_bytes = cb.int
   result.block_size = bs.int
+  var ts:csize_t
+  var flags:cint
+  buffer[0].addr.pointer.blosc_cbuffer_metainfo(ts.addr, flags.addr)
+  result.typesize = ts.int
+  result.flags = flags.int
+  result.complib = $buffer[0].addr.pointer.blosc_cbuffer_complib
 
 
 proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
@@ -169,6 +177,9 @@ proc decompressContext*(threads:int|int16=4, schunk:pointer=nil): blosc2_context
   ctx.schunk = schunk
   return blosc2_create_dctx(ctx)
 
+proc freeContext*(ctx:blosc2_context) =
+  blosc2_free_ctx(ctx)
+
 proc compress*[T](ctx:blosc2_context, input:var seq[T], output: var seq[uint8], adjustOutputSize:bool=false) =
   if adjustOutputSize:
     output.setLen(input[0].sizeof * input.len + BLOSC_MAX_OVERHEAD)
@@ -181,57 +192,8 @@ proc compress*[T](ctx:blosc2_context, input:var seq[T]): seq[uint8] =
   ctx.compress(input, result, true)
 
 proc decompress*[T](ctx:blosc2_context, compressed:var seq[uint8], output: var seq[T]) =
+  var bi = compressed.buffer_info
+  output.setLen(int(bi.uncompressed_bytes / sizeof(T)))
   let size = ctx.blosc2_decompress_ctx(compressed[0].addr.pointer, output[0].addr.pointer, output[0].sizeof * output.len)
-  if size <= 0:
+  if size != bi.uncompressed_bytes:
     raise newException(IOError, "blosc2: error decompressing")
-  output.setLen(int(size / sizeof(T)))
-
-when isMainModule:
-  blosc_init()
-  echo blosc_list_compressors()
-  echo blosc_set_compressor("blosclz")
-  blosc_set_delta(1)
-  blosc_set_nthreads(4)
-
-  var x = newSeq[int64](1024)
-  for i in 0..x.high:
-    x[i] = 8'i32 * i.int64
-
-  #var compressed = newSeq[uint8](400)
-  #echo "OK"
-
-  #echo "compressed:", blosc_compress(9.cint, 1.cint, x[0].sizeof.csize_t, x[0].sizeof.csize_t * x.len.csize_t, x[0].addr.pointer, compressed[0].addr.pointer, compressed[0].sizeof * compressed.len)
-  #echo x[0].sizeof * x.len
-  var compressed = x.compress(delta=true, shuffle=true)
-  echo compressed.len
-
-  var decomp = decompress[int64](compressed, len(x))
-
-  echo decomp[0..10]
-
-  block:
-
-    #var cp = BLOSC2_CPARAMS_DEFAULTS
-    #cp.typesize = 4
-    var ctx = compressContext[int32]("blosclz", delta=false)
-    var dctx = decompressContext()
-    var x = newSeq[int32](400)
-    for i in 0..x.high:
-      x[i] = 8'i32 * i.int32
-
-    var compressed = ctx.compress(x)
-    echo "compressed bytes:", compressed.len
-    echo "uncompressed bytes:", x.len * sizeof(x[0])
-    #echo "OK"
-    #echo x[0].sizeof
-
-    #echo "cctx:", ctx.blosc2_compress_ctx(x[0].sizeof * x.len, x[0].addr.pointer, compressed[0].addr.pointer, compressed[0].sizeof * compressed.len)
-
-    for i in x.mitems: i = 0
-    doAssert x[10] == 0
-    dctx.decompress(compressed, x)
-    echo x[0..10]
-
-
-
-  blosc_destroy()

@@ -128,11 +128,11 @@ type Action* {.pure.} = enum
   Compress
   Decompress
 
-proc compressContext*(codec:string, clevel:int|uint8=5, delta:bool=false, threads:int|int16=4, use_dict:bool=false, typesize:int32=8, schunk:pointer=nil): blosc2_context =
+proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
   var ctx = blosc2_cparams()
   ctx.compcode = blosc_compname_to_compcode(codec).uint8
   ctx.clevel = clevel.uint8
-  ctx.typesize = typesize
+  ctx.typesize = sizeof(T)
   ctx.schunk = schunk
   ctx.nthreads = threads.int16
   ctx.filters = [0'u8, 0, 0, 0, 0, BloscFilters.SHUFFLE.uint8]
@@ -193,7 +193,7 @@ when isMainModule:
 
     #var cp = BLOSC2_CPARAMS_DEFAULTS
     #cp.typesize = 4
-    var ctx = compressContext("blosclz", typesize=4, delta=false)
+    var ctx = compressContext[int32]("blosclz", delta=false)
     var dctx = decompressContext()
     var x = newSeq[int32](400)
     for i in 0..x.high:

@@ -110,6 +110,78 @@ type blosc2_dparams* {.blosc2.} = object
     nthreads*: cint            ## !< The number of threads to use internally (1).
     schunk*: pointer           ## !< The associated schunk, if any (NULL).
 
+const
+  BLOSC2_MAX_METALAYERS* = 16
+  BLOSC2_METALAYER_NAME_MAXLEN* = 31
+
+type
+  blosc2_frame* {.bycopy.} = object
+    fname*: cstring            ## !< The name of the file; if NULL, this is in-memory
+    sdata*: ptr uint8         ## !< The in-memory serialized data
+    coffsets*: ptr uint8      ## !< Pointers to the (compressed, on-disk) chunk offsets
+    len*: int64              ## !< The current length of the frame in (compressed) bytes
+    maxlen*: int64           ## !< The maximum length of the frame; if 0, there is no maximum
+    trailer_len*: uint32     ## !< The current length of the trailer in (compressed) bytes
+
+
+## *
+##  @brief This struct is meant to store metadata information inside
+##  a #blosc2_schunk, allowing to specify, for example, how to interpret
+##  the contents included in the schunk.
+##
+type
+  blosc2_metalayer* {.bycopy.} = object
+    name*: cstring             ## !< The metalayer identifier for Blosc client (e.g. Caterva).
+    content*: ptr uint8       ## !< The serialized (msgpack preferably) content of the metalayer.
+    content_len*: int32      ## !< The length in bytes of the content.
+
+  blosc2_schunk* {.bycopy.} = object
+    version*: uint8
+    compcode*: uint8         ## !< The default compressor. Each chunk can override this.
+    clevel*: uint8           ## !< The compression level and other compress params.
+    typesize*: int32         ## !< The type size.
+    blocksize*: int32        ## !< The requested size of the compressed blocks (0; meaning automatic).
+    chunksize*: int32        ## !< Size of each chunk. 0 if not a fixed chunksize.
+    filters*: array[BLOSC2_MAX_FILTERS, uint8] ## !< The (sequence of) filters.  8-bit per filter.
+    filters_meta*: array[BLOSC2_MAX_FILTERS, uint8] ## !< Metadata for filters. 8-bit per meta-slot.
+    nchunks*: int32          ## !< Number of chunks in super-chunk.
+    nbytes*: int64           ## !< The data size + metadata size + header size (uncompressed).
+    cbytes*: int64           ## !< The data size + metadata size + header size (compressed).
+    data*: ptr ptr uint8       ## !< Pointer to chunk data pointers buffer.
+    data_len*: csize           ## !< Length of the chunk data pointers buffer.
+    frame*: ptr blosc2_frame    ## !< Pointer to frame used as store for chunks.
+                          ## !<uint8* ctx;
+                          ## !< Context for the thread holder. NULL if not acquired.
+    cctx*: ptr blosc2_context   ## !< Context for compression
+    dctx*: ptr blosc2_context   ## !< Context for decompression.
+    metalayers*: array[BLOSC2_MAX_METALAYERS, ptr blosc2_metalayer] ## !< The array of metalayers.
+    nmetalayers*: int16      ## !< The number of metalayers in the frame
+    usermeta*: ptr uint8      ## <! The user-defined metadata.
+    usermeta_len*: int32     ## <! The (compressed) length of the user-defined metadata.
+
+# schunk stuff
+proc blosc2_new_schunk*(cparams: blosc2_cparams; dparams: blosc2_dparams;
+                       frame: ptr blosc2_frame): ptr blosc2_schunk {.blosc2.}
+proc blosc2_free_schunk*(schunk: ptr blosc2_schunk): cint {.blosc2.}
+proc blosc2_schunk_append_chunk*(schunk: ptr blosc2_schunk; chunk: ptr uint8;
+                                copy: bool): cint {.blosc2.}
+proc blosc2_schunk_append_buffer*(schunk: ptr blosc2_schunk; src: pointer;
+                                 nbytes: csize): cint {.blosc2.}
+proc blosc2_schunk_decompress_chunk*(schunk: ptr blosc2_schunk; nchunk: cint;
+                                    dest: pointer; nbytes: csize): cint {.blosc2.}
+proc blosc2_schunk_get_chunk*(schunk: ptr blosc2_schunk; nchunk: cint;
+                             chunk: ptr ptr uint8; needs_free: ptr bool): cint {.blosc2.}
+
+# frames:
+
+proc blosc2_new_frame*(fname:cstring): ptr blosc2_frame {.blosc2.}
+proc blosc2_schunk_to_frame(schunk: ptr blosc2_schunk, frame: ptr blosc2_frame): int64 {.blosc2.}
+proc blosc2_free_frame*(frame:ptr blosc2_frame): cint {.blosc2.}
+proc blosc2_frame_to_file*(frame: ptr blosc2_frame, fname: cstring): int64 {.blosc2.};
+proc blosc2_frame_from_file(fname:cstring): ptr blosc2_frame {.blosc2.}
+proc blosc2_schunk_from_frame*(frame: ptr blosc2_frame, copy:bool): ptr blosc2_schunk {.blosc2.}
+
+
 ## *
 ##  @brief Default struct for decompression params meant for user initialization.
 ##
@@ -155,8 +227,7 @@ proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compre
   result.flags = flags.int
   result.complib = $buffer[0].addr.pointer.blosc_cbuffer_complib
 
-
-proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
+proc create_cparams[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_cparams =
   var ctx = blosc2_cparams()
   ctx.compcode = blosc_compname_to_compcode(codec).uint8
   ctx.clevel = clevel.uint8
@@ -169,6 +240,10 @@ proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:i
   ctx.filters_meta =  [0'u8, 0, 0, 0, 0, 0]
   ctx.prefilter = nil
   ctx.pparams = nil
+  return ctx
+
+proc compressContext*[T](codec:string, clevel:int=5, delta:bool=false, threads:int=4, use_dict:bool=false, schunk:pointer=nil): blosc2_context =
+  var ctx = create_cparams[T](codec, clevel, delta, threads, use_dict, schunk)
   return blosc2_create_cctx(ctx)
 
 proc decompressContext*(threads:int|int16=4, schunk:pointer=nil): blosc2_context =
@@ -179,6 +254,35 @@ proc decompressContext*(threads:int|int16=4, schunk:pointer=nil): blosc2_context
 
 proc freeContext*(ctx:blosc2_context) =
   blosc2_free_ctx(ctx)
+
+type Frame = ref object
+  c: ptr blosc2_frame
+
+type superChunk = ref object
+  c: ptr blosc2_schunk
+  frame: Frame
+
+proc destroy_frame(f:Frame) =
+  if f.c != nil:
+    discard f.c.blosc2_free_frame
+
+proc destroy_chunk(c:superChunk) =
+  if c.c != nil:
+    discard c.c.blosc2_free_schunk
+
+proc newFrame(path:string): Frame =
+  new(result, destroy_frame)
+  if path == "":
+    result.c = blosc2_new_frame(nil)
+  else:
+    result.c = blosc2_new_frame(path)
+
+proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, fname:string=""): superChunk =
+  new(result, destroy_chunk)
+  var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
+  var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
+  result.c = blosc2_new_schunk(cparams, dparams, nil)
+
 
 proc compress*[T](ctx:blosc2_context, input:var seq[T], output: var seq[uint8], adjustOutputSize:bool=false) =
   if adjustOutputSize:

@@ -258,9 +258,9 @@ proc freeContext*(ctx:blosc2_context) =
 type Frame = ref object
   c: ptr blosc2_frame
 
-type superChunk = ref object
+type superChunk*[T] = ref object
   c: ptr blosc2_schunk
-  frame: Frame
+  frame*: Frame
 
 proc destroy_frame(f:Frame) =
   if f.c != nil:
@@ -277,11 +277,15 @@ proc newFrame(path:string): Frame =
   else:
     result.c = blosc2_new_frame(path)
 
-proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, fname:string=""): superChunk =
+proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, fname:string=""): superChunk[T] =
   new(result, destroy_chunk)
   var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
   var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
-  result.c = blosc2_new_schunk(cparams, dparams, nil)
+  if fname != "":
+    result.frame = newFrame(fname)
+    result.c = blosc2_new_schunk(cparams, dparams, result.frame.c)
+  else:
+    result.c = blosc2_new_schunk(cparams, dparams, nil)
 
 
 proc compress*[T](ctx:blosc2_context, input:var seq[T], output: var seq[uint8], adjustOutputSize:bool=false) =

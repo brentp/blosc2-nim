@@ -56,3 +56,7 @@ suite "blosc2":
     echo bi
 
 
+  test "schunk with frame":
+
+    var s = newSuperChunk[int32](fname="x.blc")
+    check s.frame != nil

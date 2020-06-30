@@ -1,3 +1,4 @@
+import strformat
 
 {.passL: "-lblosc2 -lpthread".}
 {.pragma: blosc2, importc, header: "<blosc2.h>".}
@@ -7,7 +8,7 @@ const BLOSC_MAX_OVERHEAD = 32
 proc blosc_get_blocksize(): cint {.blosc2.}
 proc blosc_set_blocksize(): cint {.blosc2.}
 proc blosc_list_compressors*(): cstring {.blosc2.}
-proc blosc_init() {.blosc2.}
+proc blosc_init*() {.blosc2.}
 proc blosc_destroy() {.blosc2.}
 proc blosc_set_delta(dodelta:cint) {.discardable, blosc2.}
 proc blosc_set_nthreads(nthreads:cint): cint {.discardable, blosc2.}
@@ -129,13 +130,12 @@ type
 ##  a #blosc2_schunk, allowing to specify, for example, how to interpret
 ##  the contents included in the schunk.
 ##
-type
-  blosc2_metalayer* {.bycopy.} = object
+type blosc2_metalayer* {.bycopy.} = object
     name*: cstring             ## !< The metalayer identifier for Blosc client (e.g. Caterva).
     content*: ptr uint8       ## !< The serialized (msgpack preferably) content of the metalayer.
     content_len*: int32      ## !< The length in bytes of the content.
 
-  blosc2_schunk* {.bycopy.} = object
+type blosc2_schunk* {.bycopy.} = object
     version*: uint8
     compcode*: uint8         ## !< The default compressor. Each chunk can override this.
     clevel*: uint8           ## !< The compression level and other compress params.
@@ -166,9 +166,9 @@ proc blosc2_free_schunk*(schunk: ptr blosc2_schunk): cint {.blosc2.}
 proc blosc2_schunk_append_chunk*(schunk: ptr blosc2_schunk; chunk: ptr uint8;
                                 copy: bool): cint {.blosc2.}
 proc blosc2_schunk_append_buffer*(schunk: ptr blosc2_schunk; src: pointer;
-                                 nbytes: csize): cint {.blosc2.}
+                                 nbytes: csize_t): cint {.blosc2.}
 proc blosc2_schunk_decompress_chunk*(schunk: ptr blosc2_schunk; nchunk: cint;
-                                    dest: pointer; nbytes: csize): cint {.blosc2.}
+                                    dest: pointer; nbytes: csize_t): cint {.blosc2.}
 proc blosc2_schunk_get_chunk*(schunk: ptr blosc2_schunk; nchunk: cint;
                              chunk: ptr ptr uint8; needs_free: ptr bool): cint {.blosc2.}
 
@@ -270,22 +270,50 @@ proc destroy_chunk(c:superChunk) =
   if c.c != nil:
     discard c.c.blosc2_free_schunk
 
-proc newFrame(path:string): Frame =
+proc newFrame*(path:string): Frame =
   new(result, destroy_frame)
   if path == "":
     result.c = blosc2_new_frame(nil)
   else:
     result.c = blosc2_new_frame(path)
 
-proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, fname:string=""): superChunk[T] =
+proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, frame:Frame=nil): superChunk[T] =
   new(result, destroy_chunk)
   var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
   var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
-  if fname != "":
-    result.frame = newFrame(fname)
+  if frame != nil:
+    result.frame = frame
     result.c = blosc2_new_schunk(cparams, dparams, result.frame.c)
   else:
     result.c = blosc2_new_schunk(cparams, dparams, nil)
+
+proc len*[T](s:superChunk[T]): int {.inline.} =
+  ## number of chunks in the super chunk
+  result = s.c.n_chunks
+
+proc add*[T](s:superChunk[T], input: var seq[T], newChunk:bool=false) =
+  discard s.c.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
+
+
+proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
+  if i < 0 or i > s.len: raise newException(IndexError, &"chunk {i} is out of bounds in superchunk with len: {s.len}")
+
+  var chunk:ptr uint8
+  var needs_free:bool
+  let res = s.c.blosc2_schunk_get_chunk(i.cint, chunk.addr, needs_free.addr)
+  if res < 0:
+    raise newException(IndexError, "error:" & $res & " accessing chunk:" & $i)
+  proc free(a1: pointer) {.cdecl, importc: "free", header: "<stdlib.h>".}
+
+  var ub:csize_t
+  var cb:csize_t
+  var bs:csize_t
+  chunk.pointer.blosc_cbuffer_sizes(ub.addr, cb.addr, bs.addr)
+  if needs_free:
+    free(chunk)
+
+  output.setLen(int(ub.int / sizeof(T)))
+  doAssert s.c.blosc2_schunk_decompress_chunk(i.cint, output[0].addr.pointer, ub) == ub.cint, "into: unexpected size of decompressed chunk"
 
 
 proc compress*[T](ctx:blosc2_context, input:var seq[T], output: var seq[uint8], adjustOutputSize:bool=false) =

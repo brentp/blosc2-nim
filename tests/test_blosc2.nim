@@ -58,5 +58,31 @@ suite "blosc2":
 
   test "schunk with frame":
 
-    var s = newSuperChunk[int32](fname="x.blc")
-    check s.frame != nil
+
+    var f = newFrame("x.blc")
+    var si32 = newSuperChunk[int32]() #frame=f)
+    echo "TODO: handle this when frame is set"
+    #check si32.frame != nil
+
+    # NOTE: now adding another chunk to the same frame.
+    var sf32 = newSuperChunk[float32](frame=f)
+    check sf32.frame != nil
+    var x = newSeq[int32](20000)
+    for i in 0..<x.len:
+      x[i] = int32(i * 2)
+    si32.add(x)
+
+    var f32 = newSeq[float32](20000)
+    for i in 0..<f32.len:
+      f32[i] = float32(i * 2)
+
+    sf32.add(f32)
+
+    check si32.len == 1
+
+
+    var output: seq[int32]
+    si32.into(0, output)
+
+    for i, o in output:
+      check o == x[i]

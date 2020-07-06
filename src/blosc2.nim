@@ -1,4 +1,5 @@
 import strformat
+import os
 
 {.passL: "-lblosc2 -lpthread".}
 {.pragma: blosc2, importc, header: "<blosc2.h>".}
@@ -20,7 +21,6 @@ proc blosc_compress(clevel:cint, doshuffle:cint, typesize: csize_t,
     nbytes:csize_t, src: pointer, dest:pointer, destsize:csize_t): cint {.blosc2.}
 
 proc blosc_decompress(src:pointer, dest:pointer, destsize:csize_t): cint {.blosc2.}
-
 
 type BloscLib* {.pure.} = enum
   BLOSCLZ = 0
@@ -259,7 +259,7 @@ type Frame = ref object
   c: ptr blosc2_frame
 
 type superChunk*[T] = ref object
-  c: ptr blosc2_schunk
+  c*: ptr blosc2_schunk
   frame*: Frame
 
 proc destroy_frame(f:Frame) =
@@ -270,15 +270,27 @@ proc destroy_chunk(c:superChunk) =
   if c.c != nil:
     discard c.c.blosc2_free_schunk
 
-proc newFrame*(path:string): Frame =
+proc newFrame*(path:string, mode:FileMode=fmWrite): Frame =
   new(result, destroy_frame)
   if path == "":
-    result.c = blosc2_new_frame(nil)
-  else:
-    result.c = blosc2_new_frame(path)
+      result.c = blosc2_new_frame(nil)
+      return
 
-proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, frame:Frame=nil): superChunk[T] =
+  if mode in {fmRead}:
+    doAssert path != "", "expected path with writable mode"
+    result.c = blosc2_frame_from_file(path)
+  elif mode == fmWrite:
+    result.c = blosc2_new_frame(path)
+  if result.c == nil:
+    raise newException(IOError, "blosc2: error opening file:" & path)
+
+proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, frame:Frame=nil, newChunk:bool=true): superChunk[T] =
   new(result, destroy_chunk)
+  if frame != nil and not newChunk:
+    result.c = blosc2_schunk_from_frame(frame.c, false)
+    result.frame = frame
+    return
+
   var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
   var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
   if frame != nil:
@@ -291,9 +303,8 @@ proc len*[T](s:superChunk[T]): int {.inline.} =
   ## number of chunks in the super chunk
   result = s.c.n_chunks
 
-proc add*[T](s:superChunk[T], input: var seq[T], newChunk:bool=false) =
-  discard s.c.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
-
+proc add*[T](s:superChunk[T], input: var seq[T], newChunk:bool=false): int {.discardable.} =
+  result = s.c.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
 
 proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
   if i < 0 or i > s.len: raise newException(IndexError, &"chunk {i} is out of bounds in superchunk with len: {s.len}")

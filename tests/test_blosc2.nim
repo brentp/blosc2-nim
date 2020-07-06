@@ -60,8 +60,7 @@ suite "blosc2":
 
 
     var f = newFrame("x.blc")
-    var si32 = newSuperChunk[int32]() #frame=f)
-    echo "TODO: handle this when frame is set"
+    var si32 = newSuperChunk[int32](frame=f)
     #check si32.frame != nil
 
     # NOTE: now adding another chunk to the same frame.
@@ -72,6 +71,9 @@ suite "blosc2":
       x[i] = int32(i * 2)
     si32.add(x)
 
+    echo "nbytes:", si32.c.nbytes
+    echo "cbytes:", si32.c.cbytes
+
     var f32 = newSeq[float32](20000)
     for i in 0..<f32.len:
       f32[i] = float32(i * 2)
@@ -80,9 +82,17 @@ suite "blosc2":
 
     check si32.len == 1
 
+    si32 = nil
+    f = nil
+    f = newFrame("x.blc", mode=fmRead)
+    si32 = newSuperChunk[int32](frame=f, newChunk=false)
+    check si32.len == 1
+    echo "nbytes:", si32.c.nbytes
+    echo "cbytes:", si32.c.cbytes
 
     var output: seq[int32]
     si32.into(0, output)
 
     for i, o in output:
       check o == x[i]
+

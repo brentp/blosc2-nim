@@ -83,7 +83,6 @@ suite "blosc2":
       f.add(x2)
       check f.schunk.n_chunks == 3
 
-
       echo "nbytes:", f.schunk.nbytes
       echo "cbytes:", f.schunk.cbytes
       f = nil
@@ -101,3 +100,24 @@ suite "blosc2":
       for i, o in output:
         check o == x2[i]
 
+
+      var xx = f[2]
+
+      xx[22] = 33'i32
+      check f.buffer[22] == 33'i32
+
+  test "frame with metalayer":
+      var f = newFrame[int32]("x.blc")
+      f.add_metalayer("info", "very important")
+      f.add_metalayer("date", "also very important")
+
+      for l in f.metalayers:
+        echo l.key, ": ", cast[string](l.value)
+
+      check f.has_metalayer("date")
+      check f.has_metalayer("info")
+      check not f.has_metalayer("absent")
+
+      var val = f.metalayer("info")
+
+      check cast[string](val) == "very important"

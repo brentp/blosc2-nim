@@ -181,6 +181,12 @@ proc blosc2_frame_to_file*(frame: ptr blosc2_frame, fname: cstring): int64 {.blo
 proc blosc2_frame_from_file(fname:cstring): ptr blosc2_frame {.blosc2.}
 proc blosc2_schunk_from_frame*(frame: ptr blosc2_frame, copy:bool): ptr blosc2_schunk {.blosc2.}
 
+# metalayers
+proc blosc2_has_metalayer(shunk: ptr blosc2_schunk, name:cstring): cint {.blosc2.}
+# return index if successful, else negative
+proc blosc2_add_metalayer(shunk: ptr blosc2_schunk, name:cstring, content: ptr uint8, length:uint32): int {.blosc2.}
+proc blosc2_get_metalayer(shunk: ptr blosc2_schunk, name:cstring, content: ptr ptr uint8, length:ptr uint32): int {.blosc2.}
+
 
 ## *
 ##  @brief Default struct for decompression params meant for user initialization.
@@ -261,8 +267,9 @@ type superChunk*[T] = ref object
 type Frame*[T] = ref object
   c*: ptr blosc2_frame
   schunk*: ptr blosc2_schunk
+  buffer*: seq[T]
 
-proc destroy_frame(f:Frame) =
+proc destroy_frame[T](f:Frame[T]) =
   if f.c != nil:
     discard f.c.blosc2_free_frame
   if f.schunk != nil:
@@ -272,8 +279,33 @@ proc destroy_chunk(c:superChunk) =
   if c.c != nil:
     discard c.c.blosc2_free_schunk
 
+iterator metalayers*(f:Frame): tuple[key:string, value: seq[uint8]] =
+  for i in 0..<f.schunk.nmetalayers:
+    let key = f.schunk.metalayers[i].name
+    let value = newSeq[uint8](f.schunk.metalayers[i].content_len)
+    copyMem(value[0].unsafeAddr.pointer, f.schunk.metalayers[i].content.pointer, value.len)
+    yield ($key, value)
+
+proc add_metalayer*(f:Frame, key:string, value: seq[uint8]) =
+  doAssert f.schunk.blosc2_add_metalayer(key, value[0].unsafeAddr, value.len.uint32) >= 0, "error adding metalayer"
+
+proc metalayer*(f:Frame, key:string): seq[uint8] =
+  # get the metalayer associated with the key
+  var content: ptr uint8
+  var content_len: uint32
+  if f.schunk.blosc2_get_metalayer(key, content.addr, content_len.addr) < 0:
+    raise newException(KeyError, "unknown metalayer: " & key)
+  result.setLen(content_len)
+  copyMem(result[0].addr.pointer, content.pointer, content_len.int)
+
+proc has_metalayer*(f:Frame, key:string): bool =
+  result = f.schunk.blosc2_has_metalayer(key.cstring) >= 0
+
+proc add_metalayer*(f:Frame, key:string, value:string) =
+  f.add_metalayer(key, cast[seq[uint8]](value))
+
 proc newFrame*[T](path:string, mode:FileMode=fmWrite, codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, newChunk:bool=true): Frame[T] =
-  new(result, destroy_frame)
+  new(result, destroy_frame[T])
 
   if mode == fmRead:
     doAssert path != "", "expected path with writable mode"
@@ -334,6 +366,13 @@ proc into*[T](s:ptr blosc2_schunk, i:int, output: var seq[T]) =
 
   output.setLen(int(ub.int / sizeof(T)))
   doAssert s.blosc2_schunk_decompress_chunk(i.cint, output[0].addr.pointer, ub) == ub.cint, "into: unexpected size of decompressed chunk"
+
+proc `[]`*[T](f:var Frame[T], i:int): seq[T] =
+  ## return the data associated with the i'th chunk. Note this uses a buffer to
+  ## avoid extra copies so subsequent indexing will overwrite.
+  f.schunk.into(i, f.buffer)
+  shallow(f.buffer)
+  return f.buffer
 
 proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
   s.c.info(i, output)

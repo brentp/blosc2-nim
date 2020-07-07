@@ -2,6 +2,12 @@ import ./blosc2pkg/blosc2_sys
 import strformat
 import os
 
+converter toCsize*(i:int): csize_t =
+  i.csize_t
+converter toCint*(i:int): cint =
+  i.cint
+
+
 proc buffer_info*(buffer: var seq[uint8]): tuple[uncompressed_bytes: int, compressed_bytes:int, blocksize:int, typesize:int, flags: int, complib:string] =
   ## given a compressed buffer report the compressed, uncompressed, and block-size
   var ub:csize_t
@@ -131,6 +137,9 @@ proc add*[T](s:superChunk[T], input: var seq[T], newChunk:bool=false): int {.dis
 proc add*[T](f:Frame[T], input: var seq[T], newChunk:bool=false): int {.discardable.} =
   result = f.schunk.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
 
+proc info*[T](f:Frame[T]): tuple[n_chunks: int32, uncompressed_bytes: int64, compressed_bytes: int64] =
+  return (n_chunks: f.schunk.nchunks, uncompressed_bytes: f.schunk.nbytes,
+          compressed_bytes: f.schunk.cbytes)
 
 proc into*[T](s:ptr blosc2_schunk, i:int, output: var seq[T]) =
   if i < 0 or i > s.n_chunks: raise newException(IndexError, &"chunk {i} is out of bounds in superchunk with len: {s.n_chunks}")

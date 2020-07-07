@@ -1,8 +1,3 @@
-[nim](https://nim-lang.org) wrapper for [blosc2](https://github.com/Blosc/c-blosc2) compression library.
-
-# Example
-
-```Nim
 import blosc2
 
 var values = newSeq[int32](100_000)
@@ -36,4 +31,3 @@ when isMainModule:
   create()
 
   use_frame()
-```

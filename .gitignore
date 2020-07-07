@@ -1,2 +1,4 @@
 tests/test_blosc2
 src/blosc2
+example
+x.blsc

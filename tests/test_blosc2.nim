@@ -1,5 +1,6 @@
 import unittest
 import blosc2
+import blosc2pkg/blosc2_sys
 
 var x = newSeq[int32](1024)
 for i in 0..x.high:

@@ -58,41 +58,46 @@ suite "blosc2":
 
   test "schunk with frame":
 
+    for delta in [true, false]:
 
-    var f = newFrame("x.blc")
-    var si32 = newSuperChunk[int32](frame=f)
-    #check si32.frame != nil
+      var f = newFrame[int32]("x.blc", delta=delta)
+      #var si32 = newSuperChunk[int32](frame=f)
+      #check si32.frame != nil
 
-    # NOTE: now adding another chunk to the same frame.
-    var sf32 = newSuperChunk[float32](frame=f)
-    check sf32.frame != nil
-    var x = newSeq[int32](20000)
-    for i in 0..<x.len:
-      x[i] = int32(i * 2)
-    si32.add(x)
+      # NOTE: now adding another chunk to the same frame.
+      #
 
-    echo "nbytes:", si32.c.nbytes
-    echo "cbytes:", si32.c.cbytes
+      var x = newSeq[int32](20000)
+      var x2 = newSeq[int32](200)
+      for i in 0..<x.len:
+        x[i] = int32(i * 2)
+      for i in 0..<x2.len:
+        x2[i] = int32(i * 222)
 
-    var f32 = newSeq[float32](20000)
-    for i in 0..<f32.len:
-      f32[i] = float32(i * 2)
+      f.add(x)
+      check f.schunk.n_chunks == 1
 
-    sf32.add(f32)
+      f.add(x)
+      check f.schunk.n_chunks == 2
 
-    check si32.len == 1
+      f.add(x2)
+      check f.schunk.n_chunks == 3
 
-    si32 = nil
-    f = nil
-    f = newFrame("x.blc", mode=fmRead)
-    si32 = newSuperChunk[int32](frame=f, newChunk=false)
-    check si32.len == 1
-    echo "nbytes:", si32.c.nbytes
-    echo "cbytes:", si32.c.cbytes
 
-    var output: seq[int32]
-    si32.into(0, output)
+      echo "nbytes:", f.schunk.nbytes
+      echo "cbytes:", f.schunk.cbytes
+      f = nil
+      f = newFrame[int32]("x.blc", mode=fmRead)
+      echo "nbytes:", f.schunk.nbytes
+      echo "cbytes:", f.schunk.cbytes
 
-    for i, o in output:
-      check o == x[i]
+      var output: seq[int32]
+      f.into(0, output)
+      for i, o in output:
+        check o == x[i]
+
+      f.into(2, output)
+      check output.len == x2.len
+      for i, o in output:
+        check o == x2[i]
 

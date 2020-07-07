@@ -236,8 +236,8 @@ proc create_cparams[T](codec:string, clevel:int=5, delta:bool=false, threads:int
   ctx.nthreads = threads.int16
   ctx.filters = [0'u8, 0, 0, 0, 0, BloscFilters.SHUFFLE.uint8]
   if delta:
-    ctx.filters[0] = BloscFilters.DELTA.uint8
-  ctx.filters_meta =  [0'u8, 0, 0, 0, 0, 0]
+    ctx.filters[4] = BloscFilters.DELTA.uint8
+  #ctx.filters_meta =  [0'u8, 0, 0, 0, 0, 0]
   ctx.prefilter = nil
   ctx.pparams = nil
   return ctx
@@ -255,41 +255,42 @@ proc decompressContext*(threads:int|int16=4, schunk:pointer=nil): blosc2_context
 proc freeContext*(ctx:blosc2_context) =
   blosc2_free_ctx(ctx)
 
-type Frame = ref object
-  c: ptr blosc2_frame
-
 type superChunk*[T] = ref object
   c*: ptr blosc2_schunk
-  frame*: Frame
+
+type Frame*[T] = ref object
+  c*: ptr blosc2_frame
+  schunk*: ptr blosc2_schunk
 
 proc destroy_frame(f:Frame) =
   if f.c != nil:
     discard f.c.blosc2_free_frame
+  if f.schunk != nil:
+    discard f.schunk.blosc2_free_schunk
 
 proc destroy_chunk(c:superChunk) =
   if c.c != nil:
     discard c.c.blosc2_free_schunk
 
-proc newFrame*(path:string, mode:FileMode=fmWrite): Frame =
+proc newFrame*[T](path:string, mode:FileMode=fmWrite, codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, newChunk:bool=true): Frame[T] =
   new(result, destroy_frame)
-  if path == "":
-      result.c = blosc2_new_frame(nil)
-      return
 
-  if mode in {fmRead}:
+  if mode == fmRead:
     doAssert path != "", "expected path with writable mode"
     result.c = blosc2_frame_from_file(path)
+    result.schunk = blosc2_schunk_from_frame(result.c, false)
   elif mode == fmWrite:
     result.c = blosc2_new_frame(path)
+    var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
+    var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
+    result.schunk = blosc2_new_schunk(cparams, dparams, result.c)
+  else:
+    doAssert false, "NotImplemented: only fmRead and fmWrite are supported"
+
   if result.c == nil:
     raise newException(IOError, "blosc2: error opening file:" & path)
 
-proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, frame:Frame=nil, newChunk:bool=true): superChunk[T] =
-  new(result, destroy_chunk)
-  if frame != nil and not newChunk:
-    result.c = blosc2_schunk_from_frame(frame.c, false)
-    result.frame = frame
-    return
+proc newSuperChunk*[T](codec:string="blosclz", clevel:int=5, delta:bool=false, threads:int=4, frame:Frame=nil): superChunk[T] =
 
   var cparams = create_cparams[T](codec, clevel, delta, threads, false, nil)
   var dparams = blosc2_dparams(nthreads:threads.int16, schunk:nil)
@@ -303,17 +304,25 @@ proc len*[T](s:superChunk[T]): int {.inline.} =
   ## number of chunks in the super chunk
   result = s.c.n_chunks
 
+proc len*[T](f:Frame[T]): int {.inline.} =
+  ## number of chunks in the super chunk
+  result = f.schunk.n_chunks
+
 proc add*[T](s:superChunk[T], input: var seq[T], newChunk:bool=false): int {.discardable.} =
   result = s.c.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
 
-proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
-  if i < 0 or i > s.len: raise newException(IndexError, &"chunk {i} is out of bounds in superchunk with len: {s.len}")
+proc add*[T](f:Frame[T], input: var seq[T], newChunk:bool=false): int {.discardable.} =
+  result = f.schunk.blosc2_schunk_append_buffer(input[0].addr.pointer, sizeof(T) * input.len)
+
+
+proc into*[T](s:ptr blosc2_schunk, i:int, output: var seq[T]) =
+  if i < 0 or i > s.n_chunks: raise newException(IndexError, &"chunk {i} is out of bounds in superchunk with len: {s.n_chunks}")
 
   var chunk:ptr uint8
   var needs_free:bool
-  let res = s.c.blosc2_schunk_get_chunk(i.cint, chunk.addr, needs_free.addr)
+  let res = s.blosc2_schunk_get_chunk(i.cint, chunk.addr, needs_free.addr)
   if res < 0:
-    raise newException(IndexError, "error:" & $res & " accessing chunk:" & $i)
+    raise newException(IndexDefect, "error:" & $res & " accessing chunk:" & $i)
   proc free(a1: pointer) {.cdecl, importc: "free", header: "<stdlib.h>".}
 
   var ub:csize_t
@@ -324,8 +333,13 @@ proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
     free(chunk)
 
   output.setLen(int(ub.int / sizeof(T)))
-  doAssert s.c.blosc2_schunk_decompress_chunk(i.cint, output[0].addr.pointer, ub) == ub.cint, "into: unexpected size of decompressed chunk"
+  doAssert s.blosc2_schunk_decompress_chunk(i.cint, output[0].addr.pointer, ub) == ub.cint, "into: unexpected size of decompressed chunk"
 
+proc into*[T](s:superChunk[T], i:int, output: var seq[T]) =
+  s.c.info(i, output)
+
+proc into*[T](f:Frame[T], i:int, output: var seq[T]) =
+  f.schunk.into(i, output)
 
 proc compress*[T](ctx:blosc2_context, input:var seq[T], output: var seq[uint8], adjustOutputSize:bool=false) =
   if adjustOutputSize:
@@ -344,3 +358,7 @@ proc decompress*[T](ctx:blosc2_context, compressed:var seq[uint8], output: var s
   let size = ctx.blosc2_decompress_ctx(compressed[0].addr.pointer, output[0].addr.pointer, output[0].sizeof * output.len)
   if size != bi.uncompressed_bytes:
     raise newException(IOError, "blosc2: error decompressing")
+
+when isMainModule:
+
+  var x = newFrame[int32]("x.blc")
